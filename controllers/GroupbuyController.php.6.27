@@ -1,0 +1,621 @@
+<?php
+/**
+ * Created by PhpStorm.
+ * User: Administrator
+ * Date: 2018/6/15
+ * Time: 14:59
+ */
+
+namespace app\controllers;
+
+use app\common\behavior\NoCsrs;
+use app\models\Admin;
+use app\models\Groupbuy;
+use app\models\Groupbuylog;
+use app\models\Groupbuystatus;
+use yii\db\Exception;
+use yii\web\Controller;
+use Yii;
+
+class GroupbuyController extends Controller
+{
+    public function behaviors()
+    {
+        return [
+            'csrf' => [
+                'class' => NoCsrs::className(),
+                'controller' => $this,
+                'actions' => [
+                    'lists',
+                    "price",
+                    "profit",
+                    "addprice",
+                    "citylist",
+                    "oprice"
+
+                ]
+            ]
+        ];
+    }
+
+    /*活动上下架时的条件判断*/
+    private function check($activeId){
+
+        /*是否有填写原价*/
+        $model = Groupbuy::findOne($activeId);
+
+        if($model->origin_price<=0){
+            return ['rs'=>false,"msg"=>"请填写活动产品原价"];
+        }
+        /*是否有填写售价，乌阶梯价时*/
+        if($model->price<=0){
+            return ['rs'=>false,"msg"=>"请填写活动产品售价"];
+        }
+
+        /*有阶梯价时，是否填写了阶梯价和售价*/
+        $purchasePrice = json_decode($model->purchase_tiered_prices,true);
+        if($purchasePrice){
+            $salesPrice = json_decode($model->tiered_prices,true);
+            if(!$salesPrice){
+                return ['rs'=>false,'msg'=>'请填写活动的产品的阶梯售价'];
+            }
+            $p = array_column($purchasePrice,'groupon_num');
+            $s = array_column($salesPrice,'groupon_num');
+            $r = array_diff($p,$s);
+            if($r){
+                return ['rs'=>false,'msg'=>'请填写活动的产品的阶梯售价'.__LINE__];
+            }
+
+                foreach ($salesPrice as $sk=>$sv){
+                    if( $sv['price']<0){
+                        return ['rs'=>false,'msg'=>'请填写活动的产品的阶梯售价'.__LINE__];
+                    }
+                }
+
+        }
+        return ['rs'=>true];
+    }
+
+    /* 活动上架*/
+    public function actionUp()
+    {
+        Yii::$app->response->format = 'json';
+        $id = Yii::$app->request->get('id');
+        $status = Yii::$app->request->get('status');
+        $status = intval($status);
+        if(!in_array($status,[1,3])){
+            return ['rs'=>'false','msg'=>"数据缺失".__LINE__];
+        }
+        $db = Yii::$app->db;
+        $adminId = Yii::$app->session->get('admin_id');
+        if(Yii::$app->session->get('parent_admin_role_id') == '2'){
+            $area = Yii::$app->session->get('role_area');
+            $statusModel = Groupbuystatus::find()->where('groupon_id='.$id.' and area="'.$area.'"')->one();
+        }else{
+            $statusModel = Groupbuystatus::findOne($id);
+        }
+
+        if(!$statusModel||!$adminId){
+            return ['rs'=>'false','msg'=>"数据缺失".__LINE__];
+        }
+        $tiaojian = $this->check($statusModel->groupon_id);
+        if(!$tiaojian['rs']){
+            return ['rs'=>'false','msg'=>$tiaojian['msg']];
+        }
+        $time = time();
+        $transcation = $db->beginTransaction();
+        try{
+            //$statusModel->c_status = $statusModel->status;
+            $statusModel->status =$status;
+            $statusModel->updated_at = $time;
+            $statusModel->admin_id = $adminId;
+            $statusModel->oper_time = $time;
+            if(!$statusModel->save(false)) {
+               throw new Exception("操作失败".__LINE__);
+            }
+            $logModel = new Groupbuylog();
+            $logModel->group_id = $statusModel->groupon_id;
+            $logModel->admin_id = $adminId;
+            $logModel->create_at = $time;
+            $logModel->check_id = $statusModel->id;
+            $note = "把该活动状态改为:".$statusModel->status;
+            $logModel->note = $note;
+            if(!$logModel->save(false)){
+                throw new Exception("操作失败".__LINE__);
+            }
+            $transcation->commit();
+            return ['rs'=>'true'];
+        }catch (Exception $e){
+            $msg = $e->getMessage();
+            $transcation->rollBack();
+            return ['rs'=>'false','msg'=>$msg];
+        }
+
+    }
+/*活动下架*/
+    public function actionDown()
+    {
+        Yii::$app->response->format = 'json';
+        $id = Yii::$app->request->get('id');
+        $status = Yii::$app->request->get('status');
+        $status = intval($status);
+        if(!in_array($status,[2,4])){
+            return ['rs'=>'false','msg'=>"数据缺失".__LINE__];
+        }
+        $db = Yii::$app->db;
+        $adminId = Yii::$app->session->get('admin_id');
+        if(Yii::$app->session->get('parent_admin_role_id') == '2'){
+            $area = Yii::$app->session->get('role_area');
+            $statusModel = Groupbuystatus::find()->where('groupon_id='.$id.' and area="'.$area.'"')->one();
+        }else{
+            $statusModel = Groupbuystatus::findOne($id);
+        }
+        if(!$statusModel||!$adminId){
+            return ['rs'=>'false','msg'=>"数据缺失".__LINE__];
+        }
+        $tiaojian = $this->check($statusModel->groupon_id);
+        if(!$tiaojian['rs']){
+            return ['rs'=>'false','msg'=>$tiaojian['msg']];
+        }
+        $time = time();
+        $transcation = $db->beginTransaction();
+        try{
+           // $statusModel->c_status = $statusModel->status;
+            $statusModel->status = $status;
+            $statusModel->updated_at = $time;
+            $statusModel->admin_id = $adminId;
+            $statusModel->oper_time = $time;
+            if(!$statusModel->save(false)) {
+                throw new Exception("操作失败".__LINE__);
+            }
+            $logModel = new Groupbuylog();
+            $logModel->group_id = $statusModel->groupon_id;
+            $logModel->admin_id = $adminId;
+            $logModel->create_at = $time;
+            $logModel->check_id = $statusModel->id;
+            $note = "把该活动状态改为:".$statusModel->status;
+            $logModel->note = $note;
+            if(!$logModel->save(false)){
+                throw new Exception("操作失败".__LINE__);
+            }
+            $transcation->commit();
+            return ['rs'=>'true'];
+        }catch (Exception $e){
+            $msg = $e->getMessage();
+            $transcation->rollBack();
+            return ['rs'=>'false','msg'=>$msg];
+        }
+
+    }
+
+//审核时，确保填了售价和原价
+
+
+    public function actionCitylist()
+    {
+        Yii::$app->response->format = 'json';
+        $id = Yii::$app->request->get('id');
+        return Groupbuystatus::find()->leftJoin("admin", "admin.area=promotion_groupon_status.area")->select("admin.company_name")->where('promotion_groupon_status.groupon_id=' . $id)->asArray()->distinct()->all();
+
+    }
+
+    public function actionAddprice()
+    {
+        Yii::$app->response->format = 'json';
+        $post = Yii::$app->request->post();
+        if (!$post['id'] || !$post['price'] || !$post['price']['price'] || !$post['price']['groupnum']) {
+            return ['rs' => 'false', 'msg' => '参数缺失' . __LINE__];
+        }
+        $model = Groupbuy::findOne($post['id']);
+        if (!$model) {
+            return ['rs' => 'false', 'msg' => "数据有误，请联系管理员" . __LINE__];
+        }
+
+        $pprice = $purchasePrice = json_decode($model->purchase_tiered_prices, true);
+        $hasPurchase = $purchasePrice ? true : false;
+        $salesPrice = json_decode($model->tiered_prices, true);
+        $purchasePrice[] = ['price' => $model->purchase_price, 'groupon_num' => $model->groupon_num];
+        foreach ($purchasePrice as $k => $v) {
+            if ($v['groupon_num'] == $post['price']['groupnum']) {
+                //售价大于采购价
+                if ($post['price']['price'] <= $v['price']) {
+                    return ['rs' => 'fasle', 'msg' => "售价要大于采购价line" . __LINE__];
+                }
+                //公司要有利润
+                $c_price = bcdiv(bcmul(bcsub(100, $model->profit_rate, 2), $post['price']['price'], 2), 100, 2);
+                $profitRate = bcsub($c_price, $v['price'], 2);
+                if ($profitRate < 0) {
+                    return ['rs' => 'false', 'msg' => '公司盈利为负值line' . __LINE__];
+                }
+
+            }
+        }
+
+
+        //售价比较,量越大价格越低；
+        if ($salesPrice) {
+            foreach ($salesPrice as $sk => $sv) {
+                if ($post['price']['groupnum'] == $model->groupon_num) {
+                    if ($post['price']['price'] <= $sv['price']) {
+                        return ['rs' => 'false', 'msg' => "数量越小价格应该越高" . __LINE__];
+                    }
+                }
+                if (($post['price']['groupnum'] > $sv['groupon_num']) && ($post['price']['price'] >= $sv['price'])) {
+                    return ['rs' => 'false', 'msg' => "数量越大价格应该越低" . __LINE__];
+                }
+
+            }
+
+        } else {
+            if ($hasPurchase) {
+                if (($model->groupon_num != $post['price']['groupnum']) && ($model->price > 0)) {
+                    if ($post['price']['price'] >= $model->price) {
+                        return ['rs' => 'fasle', 'msg' => "数量越大价格应该越低" . __LINE__];
+                    }
+                }
+            }
+        }
+        $adminId = Yii::$app->session->get("admin_id");
+        if (!$adminId) {
+            return ['rs' => 'false', 'msg' => '非法操作' . __LINE__];
+        };
+
+        $db = Yii::$app->db;
+        $transcation = $db->beginTransaction();
+        $time = time();
+        try {
+            //是否有价格阶梯
+            if ($hasPurchase) {
+                $notired = false;
+                if ($salesPrice) {
+                    $groupNum = array_column($salesPrice, 'groupon_num');
+                    if (in_array($post['price']['groupnum'], $groupNum)) {
+                        //有在更新
+                        foreach ($salesPrice as $k => $v) {
+                            if ($v['groupon_num'] == $post['price']['groupnum']) {
+                                $salesPrice[$k]['price'] = $post['price']['price'];
+                            }
+                        }
+                        $model->tiered_prices = json_encode($salesPrice);
+
+                    } else {
+                        //没有在添加,一种最低成团，一种有阶梯的情况
+                        if ($post['price']['groupnum'] == $model->groupon_num) {
+                            $notired = true;
+                            $model->price = $post['price']['price'];
+                        } else {
+                            $salesPrice[] = ['groupon_num' => $post['price']['groupnum'], 'price' => $post['price']['price']];
+                            $model->tiered_prices = json_encode($salesPrice);
+                        }
+                    }
+                } else {
+                    $opgm = array_column($pprice, 'groupon_num');
+                    if (in_array($post['price']['groupnum'], $opgm)) {
+                        $salesPrice[] = ['groupon_num' => $post['price']['groupnum'], 'price' => $post['price']['price']];
+                        $model->tiered_prices = json_encode($salesPrice);
+                    } else {
+                        if ($post['price']['groupnum'] == $model->groupon_num) {
+                            $notired = true;
+                            $model->price = $post['price']['price'];
+                        }
+                    }
+                }
+
+            } else {
+                $model->price = $post['price']['price'];
+            }
+            $model->updated_at = $time;
+            if (!$model->save(false)) {
+                throw new Exception("系统错误，请联系管理员" . __LINE__);
+            }
+            $logModel = new Groupbuylog();
+            $logModel->group_id = $post['id'];
+            $logModel->admin_id = $adminId;
+            $logModel->create_at = $time;
+           //$logModel->check_id = $statusModel->id;
+
+            $note = "把团购id为：" . $post['id'] . "数量为:" . $post['price']['groupnum'] . "的售价设为：" . $post['price']['price'];
+            $logModel->note = $note;
+            if (!$logModel->save(false)) {
+                throw new Exception("系统错误，请联系管理员" . __LINE__);
+            }
+            $transcation->commit();
+            return ['rs' => 'true'];
+        } catch (Exception $e) {
+            $msg = $e->getMessage();
+            $transcation->rollBack();
+            return ['rs' => 'false', 'msg' => $msg];
+        }
+    }
+
+
+    /* 设置原价*/
+    public function actionOprice(){
+        Yii::$app->response->format = 'json';
+        $post = Yii::$app->request->post();
+        if (!Yii::$app->session->get('admin_id') || !$post['id'] || !isset($post['origin_price'])) {
+            return ['rs' => 'false', 'msg' => '参数缺失' . __LINE__];
+        }
+        if(floatval($post['origin_price'])<=0){
+            return ['rs'=>'false','msg'=>'原价不能小于0'];
+        }
+        $model = Groupbuy::findOne($post['id']);
+        if (!$model) {
+            return ['rs' => 'false', 'msg' => '参数缺失' . __LINE__];
+        }
+        $model->origin_price = $post['origin_price'];
+        if(!$model->save(false)){
+                return ['rs'=>'false','msg'=>'设置失败'.__LINE__];
+        }
+        return ['rs'=>'true'];
+    }
+
+
+    /* 设置店东分润*/
+    public function actionProfit()
+    {
+        Yii::$app->response->format = 'json';
+        $post = Yii::$app->request->post();
+        if (!Yii::$app->session->get('admin_id') || !$post['id'] || !$post['profit_rate']) {
+            return ['rs' => 'false', 'msg' => '参数缺失' . __LINE__];
+        }
+        $model = Groupbuy::findOne($post['id']);
+        if (!$model) {
+            return ['rs' => 'false', 'msg' => '参数缺失' . __LINE__];
+        }
+
+        if (bcmul($model->price, $post['profit_rate'], 2) > (bcsub($model->price, $model->purchase_price, 2) * 100)) {
+            return ['rs' => 'false', 'msg' => '店东分润设为' . $post['profit_rate'] . '公司将处于亏损状态' . __LINE__];
+        }
+        //if()
+        $purchasePrice = json_decode($model->purchase_tiered_prices, true);
+        $salePrice = json_decode($model->tiered_prices, true);
+        if ($purchasePrice && $salePrice) {
+            foreach ($purchasePrice as $k => $v) {
+                foreach ($salePrice as $sk => $sv) {
+                    if ($sv['groupon_num'] == $v['groupon_num']) {
+                        if (bcmul($sv['price'], $post['profit_rate'], 2) > (bcsub($sv['price'], $v['price'], 2) * 100)) {
+                            return ['rs' => 'false', 'msg' => '店东分润设为' . $post['profit_rate'] . '公司将处于亏损状态' . __LINE__];
+                        }
+                    }
+                }
+            }
+        }
+        $oldProfit = $model->profit_rate;
+        $model->profit_rate = $post['profit_rate'];
+        $time = time();
+        $model->updated_at = $time;
+        $db = Yii::$app->db;
+        $transcation = $db->beginTransaction();
+        try {
+            if (!$model->save(false)) {
+                throw new Exception("设置失败" . __LINE__);
+            }
+            $logmodel = new Groupbuylog();
+            $logmodel->admin_id = Yii::$app->session->get('admin_id');
+            $logmodel->create_at = $time;
+            $msg = $logmodel->admin_id . "把groupid为：" . $post['id'] . "的profit_rate从" . $oldProfit . '改为:' . $model->profit_rate;
+            $logmodel->note = $msg;
+            $logmodel->group_id = $post['id'];
+            if (!$logmodel->save(false)) {
+                throw new Exception("设置失败" . __LINE__);
+            }
+            $transcation->commit();
+            return ['rs' => 'true'];
+        } catch (Exception $e) {
+            $msg = $e->getMessage();
+            $transcation->rollBack();
+            return ['rs' => 'false', 'msg' => $msg];
+
+        }
+
+    }
+
+
+    /* price info*/
+    public function actionPrice()
+    {
+        Yii::$app->response->format = 'json';
+        if (Yii::$app->request->isGet) {
+            $id = Yii::$app->request->get('id');
+            $rs = Groupbuy::findOne($id);
+            $price = [];
+            if ($rs) {
+
+                if ($rs->profit_rate && $rs->price > 0) {
+                    $cprice = bcdiv(bcsub(bcmul(bcsub(100, $rs->profit_rate, 2), $rs->price, 2), $rs->purchase_price, 2), 100, 2);
+                    $sprice = bcdiv(bcmul($rs->price, $rs->profit_rate, 2), 100, 2);
+                    $price[] = ['groupon_num' => $rs->groupon_num, 'price' => $rs->price, 'origin_price' => $rs->origin_price, 'purchase_price' => $rs->purchase_price, 'c_profit' => $cprice, 's_profit' => $sprice];
+                } else {
+                    $price[] = ['groupon_num' => $rs->groupon_num, 'price' => $rs->price > 0 ? $rs->price : '', 'origin_price' => $rs->origin_price, 'purchase_price' => $rs->purchase_price, 'c_profit' => '', 's_profit' => ''];
+                }
+                //有阶梯采购价
+                if ($rs->purchase_tiered_prices) {
+                    $purchasePrice = json_decode($rs->purchase_tiered_prices, true);
+                    $salePrice = json_decode($rs->tiered_prices, true);
+                    //有售的阶梯价
+                    if ($salePrice) {
+                        $purchasePG = array_column($purchasePrice, 'groupon_num');
+                        $sg = array_column($salePrice, 'groupon_num');
+                        $df = array_diff($purchasePG, $sg);
+                    }
+                    foreach ($purchasePrice as $k => $v) {
+
+                        if ($salePrice) {
+                            if (in_array($v['groupon_num'], $df)) {
+                                $price[] = ['groupon_num' => $v['groupon_num'], 'price' => '', 'origin_price' => $rs->origin_price, 'purchase_price' => $v['price'], 'c_profit' => '', 's_profit' => ''];
+                            } else {
+                                foreach ($salePrice as $sk => $sv) {
+                                    if ($sv['groupon_num'] == $v['groupon_num']) {
+                                        if ($rs->profit_rate && $sv['price']) {
+                                            $cprice = bcdiv(bcsub(bcmul($sv['price'], bcsub(100, $rs->profit_rate, 2), 2), $v['price']), 100, 2);
+                                            $sprice = bcdiv(bcmul($sv['price'], $rs->profit_rate, 2), 100, 2);
+                                            $price[] = ['groupon_num' => $v['groupon_num'], 'price' => $sv['price'], 'origin_price' => $rs->origin_price, 'purchase_price' => $v['price'], 'c_profit' => $cprice, 's_profit' => $sprice];
+                                        } else {
+                                            $price[] = ['groupon_num' => $v['groupon_num'], 'price' => $sv['price'], 'origin_price' => $rs->origin_price, 'purchase_price' => $v['price'], 'c_profit' => '', 's_profit' => ''];
+                                        }
+                                    }
+                                }
+                            }
+
+//
+                        } else {
+                            //无售后阶梯价
+                            $price[] = ['groupon_num' => $v['groupon_num'], 'price' => '', 'origin_price' => $rs->origin_price, 'purchase_price' => $v['price'], 'c_profit' => '', 's_profit' => ''];
+                        }
+                    }
+                }
+
+            }
+            $status = Groupbuystatus::find()->select('id')->where('status in(1,3) and groupon_id=' . $id)->one();
+            $nopriceset = false;
+            if (Yii::$app->session->get('username') != 'admin') {
+                $aulist = explode('|', Yii::$app->session->get('authlist'));
+
+                if (!in_array('groupbuyprice', $aulist)) {
+                    $nopriceset = true;
+                }
+
+            }
+            return ['rs' => $price, 'status' => $status?true:false,'nopriceset'=>$nopriceset];
+        }
+    }
+
+    /*获得状态信息*/
+    public function actionStatus()
+    {
+        Yii::$app->response->format = 'json';
+        $groupId = Yii::$app->request->get('id');
+        if (!$groupId) {
+            return [];
+        }
+        $rs = Groupbuystatus::find()->leftJoin('admin', 'admin.area=promotion_groupon_status.area')->leftJoin('admin b',"b.id=promotion_groupon_status.admin_id")->where('admin.admin_role_id=9 and groupon_id=' . $groupId)->select('promotion_groupon_status.*,admin.city,b.username as admin_name')->asArray()->all();
+        if ($rs) {
+            foreach ($rs as $k => $v) {
+//                switch ($v['status']) {
+//                    case '0':
+//                        $rs[$k]['status'] = "待审核";
+//                        break;
+//                    case '1':
+//                        $rs[$k]['status'] = "已审核";
+//                        break;
+//                    case '2':
+//                        $rs[$k]['status'] = "已拒绝";
+//
+//                        break;
+//                    case '3':
+//                        $rs[$k]['status'] = "已审核";
+//
+//                        break;
+//                    case '4':
+//                        $rs[$k]['status'] = "已拒绝";
+//
+//                        break;
+//
+//                }
+                $rs[$k]['oper_time'] = $rs[$k]['oper_time'] ? date("Y-m-d H:i:s", $v['oper_time']) : null;
+
+            }
+        }
+        return $rs;
+
+
+    }
+
+    public function actionLists()
+    {
+        Yii::$app->response->format = 'json';
+        $where = [];
+        $city = [];
+        $isCity = false;
+        $curPage = 1;
+        $pageSize = Yii::$app->params['pagesize'];
+       //  $pageSize = 2;
+
+        $offset = $pageSize * ($curPage - 1);
+        $query = Groupbuy::find()->leftJoin("supplier", 'supplier.id=promotion_groupon.supplier_id');
+        if (Yii::$app->session->get('parent_admin_role_id') == '2') {
+            $area = Yii::$app->session->get('role_area');
+            $where[] = 'promotion_groupon_status.area="' .$area. '"';
+            $isCity = true;
+            $query = $query->leftJoin('promotion_groupon_status','promotion_groupon_status.groupon_id=promotion_groupon.id')->select("promotion_groupon.*,supplier.supplier_name,promotion_groupon_status.status as city_check_status");
+
+         }  else {
+//            $city = Admin::find()->select('company_name as label')->leftJoin('admin_role', 'admin.admin_role_id=admin_role.id')->distinct()->where(' admin_role.parent_id=2 ')->asArray()->all();
+//            array_unshift($city, ['label' => '全国', 'value' => 0]);
+            $query = $query ->select("promotion_groupon.*,supplier.supplier_name");
+
+            }
+        if (Yii::$app->request->isPost) {
+            $post = Yii::$app->request->post();
+            $curPage = isset($post['curPage'])?$post['curPage']:1;
+            $where = $this->search($post, $where);
+        }
+        $query = $where ?$query->where(implode(' and ', $where)) : $query;
+        $totalPage = $query->count();
+        $rs = $query->asArray()->limit($pageSize)->offset($offset)->all();
+        if ($rs) {
+            foreach ($rs as $k => $v) {
+                $rs[$k]['notice_time'] = date("Y-m-d H:i:s", $v['notice_time']);
+                $rs[$k]['begin_time'] = date("Y-m-d H:i:s", $v['begin_time']);
+                $rs[$k]['end_time'] = date("Y-m-d H:i:s", $v['end_time']);
+                // $rs[$k]['supplier_type'] = $v['supplier_type'] ? "自营" : "他营";
+                //  $rs[$k]['settllment_type'] = $v['settllment_type'] == 1 ? "月结" : "现结";
+                // $rs[$k]['status'] = $v['status'] == 1 ? "通过" : ($v['status'] == 2 ? "禁用" : "未审核");
+            }
+
+            $supplier_type = [['label' => '全部', 'value' => '3'], ['label' => '自营', 'value' => '1'], ['label' => '他营', 'value' => '0']];
+
+            $groupbuycheck=false;
+            if (Yii::$app->session->get('username') != 'admin') {
+                $aulist = explode('|', Yii::$app->session->get('authlist'));
+
+                if (!in_array('groupbuycheck', $aulist)) {
+                    $groupbuycheck = true;
+                }
+
+            }
+
+
+            return ['isCity' => $isCity, 'curPage' => $curPage, 'pageSize' => $pageSize, 'totalPage' => $totalPage, 'rs' => $rs, 'city' => $city, 'curstatus' => $supplier_type,'groupbuycheck'=>$groupbuycheck];
+        }
+
+
+    }
+
+
+    //search
+    private function search($search, $where)
+    {
+        foreach ($search as $k => $v) {
+            if ($k == 'curpage') {
+                continue;
+            }
+//            if ($k == 'curstatus') {
+//                    $where[] = ' supplier.supplier_type=' . $v;
+//                    continue;
+//            }
+            if (trim($search[$k])) {
+                if ($k == 'description') {
+                    $where[] = 'promotion_groupon.description like "%' . trim($v) . '%"';
+                }
+                if ($k == 'sku_title') {
+                    $where[] = 'promotion_groupon.sku_title like "%' . trim($v) . '%"';
+                }
+                if ($k == 'supplier_name') {
+                    $where[] = ' supplier.supplier_name like "%' . trim($v) . '%"';
+                }
+//                if ($k == 'city') {
+//                    if ($v == '全国' || !$v) {
+//                        continue;
+//                    }
+//                    $citys = explode(',', $v);
+//                    $where[] = ' supplier.city ="' . $citys[1] . '"';
+//                }
+
+            }
+        }
+        return $where;
+    }
+
+}
